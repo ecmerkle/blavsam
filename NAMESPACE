@@ -16,4 +16,4 @@ import(rstantools)
 
 export("bsam")
 
-useDynLib(bsam, .registration = TRUE)
+useDynLib(blavsam, .registration = TRUE)
