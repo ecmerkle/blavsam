@@ -1,4 +1,4 @@
-Package: bsam
+Package: blavsam
 Title: Bayesian Structural After Measurement Analysis
 Version: 0.1
 Authors@R: c(person(given = "Edgar", family = "Merkle",
@@ -16,4 +16,4 @@ Suggests: modeest(>= 2.3.3), cmdstanr, semTools, tinytest
 SystemRequirements: GNU make
 NeedsCompilation: yes
 Additional_repositories: https://mc-stan.org/r-packages/
-Config/Needs/website: brms
+
