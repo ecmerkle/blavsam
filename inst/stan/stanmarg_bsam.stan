@@ -1133,11 +1133,9 @@ generated quantities { // these matrices are saved in the output but do not figu
   vector[len_free[1]] ly_sign;
   vector[len_free[4]] bet_sign;
   vector[len_free[14]] al_sign;
-  array[Ng] matrix[m, m] PSmat;
   array[Ng] matrix[m, m] PS;
   vector[len_free[7]] Theta_cov;
   vector[len_free[5]] Theta_var;
-  vector[len_free[10]] P_r;
   vector[len_free[10]] Psi_cov;
   vector[len_free[9]] Psi_var;
   array[Ng] matrix[p, p] Sigma_full;
@@ -1392,26 +1390,24 @@ generated quantities { // these matrices are saved in the output but do not figu
   // first deal with sign constraints:
   bet_sign = B_free; //sign_constrain_reg(B_free, len_free[4], b_sign, Lambda_y_free, Lambda_y_free);
   al_sign = Alpha_free;
-  
+
   for (g in 1:Ng) {
     if (m > 0) {
       PS[g] = Psi[g];
     }
   }
-
+  
   // off-diagonal covariance parameter vectors, from cor/sd matrices:
   Theta_cov = cor2cov(Theta_r, Theta_sd, num_elements(Theta_r_free), Theta_r_skeleton, w7skel, Ng);
   Theta_var = Theta_sd_free .* Theta_sd_free;
-  if (m > 0 && len_free[10] > 0) {
+  if (m > 0 && len_free[11] > 0) {
     /* iden is created so that we can re-use cor2cov, even though
        we don't need to multiply to get covariances */
     array[Ng] matrix[m, m] iden;
     for (g in 1:Ng) {
       iden[g] = diag_matrix(rep_vector(1, m));
     }
-    Psi_cov = cor2cov(PS, iden, len_free[10], Psi_r_skeleton, w10skel, Ng);
-  } else {
-    Psi_cov = P_r;
+    Psi_cov = cor2cov(PS, iden, len_free[11], Psi_r_skeleton_f, w11skel, Ng);
   }
   Psi_var = fill_vector(Psi, Psi_skeleton, w9skel, len_free[9], Ng);
 
