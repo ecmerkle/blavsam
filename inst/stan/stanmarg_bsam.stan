@@ -808,7 +808,6 @@ transformed data { // (re)construct skeleton matrices in Stan (not that interest
     } else {
       matdim[g] = (g_start4[(g + 1), 1] - g_start4[g, 1]) + (g_start14[(g + 1), 1] - g_start14[g, 1]);
     }
-    maxdim = max(matdim);
 
     // indexing of free params across rows of Alpha combined with B
     for (r in 1:m) {
@@ -841,6 +840,7 @@ transformed data { // (re)construct skeleton matrices in Stan (not that interest
       }
     }
   }
+  maxdim = max(matdim);
 
   if (!ord && (use_suff || use_cov)) {
     // sufficient stat matrices by pattern, moved to left for missing
@@ -880,8 +880,6 @@ transformed parameters {
   vector[len_free[13]] nu_primn;
   vector[len_free[15]] tau_primn;
   
-  array[Ng] matrix[p, m] Lambda_y_A;     // = Lambda_y * (I - B)^{-1}
-  
   array[Ng] vector[p + q] Mu;
   array[Ng] matrix[p + q, p + q] Sigma;  // model covariance matrix
   array[Ng] matrix[p + q, p + q] Sigmainv_grp;  // model covariance matrix
@@ -911,10 +909,6 @@ transformed parameters {
   
   // see https://books.google.com/books?id=9AC-s50RjacC&lpg=PP1&dq=LISREL&pg=PA3#v=onepage&q=LISREL&f=false
   for (g in 1:Ng) {
-    if (m > 0) {
-      Lambda_y_A[g] = Lambda_y[g];
-    }
-    
     if (!use_cov) {
       Mu[g] = to_vector(Nu[g]);
     } else if(has_data) {
@@ -924,7 +918,7 @@ transformed parameters {
     if (p > 0) {
       Sigma[g, 1:p, 1:p] = quad_form_sym(Theta_r[g], Theta_sd[g]);
       if (m > 0) {
-	Sigma[g, 1:p, 1:p] += quad_form_sym(Psi_tmp[g], transpose(Lambda_y_A[g]));
+	Sigma[g, 1:p, 1:p] += quad_form_sym(Psi_tmp[g], transpose(Lambda_y[g]));
       }
     }
   }
@@ -1136,7 +1130,7 @@ generated quantities { // these matrices are saved in the output but do not figu
   array[Ng] matrix[m, m] PS;
   vector[len_free[7]] Theta_cov;
   vector[len_free[5]] Theta_var;
-  vector[len_free[10]] Psi_cov;
+  vector[len_free[11]] Psi_cov;
   vector[len_free[9]] Psi_var;
   array[Ng] matrix[p, p] Sigma_full;
   array[Ng] vector[p] Mu_full;
@@ -1184,7 +1178,6 @@ generated quantities { // these matrices are saved in the output but do not figu
     b_primn = to_vector(b_mn);
     alpha_primn = to_vector(alpha_mn);
   }
-
   ly_sign = sign_constrain_load(Lambda_y_free, len_free[1], lam_y_sign);
 
   for (g in 1:Ng) {
