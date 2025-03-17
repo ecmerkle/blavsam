@@ -417,6 +417,11 @@ data {
   array[Np, p] int<lower=1> dum_ov_x_idx; // index of eXo dummy ovs/lvs
   array[Np, m] int<lower=1> dum_lv_x_idx;
 
+  array[Ng] int<lower=1> measnblk; // number of blocks in measurement model
+  array[sum(measnblk), 3] int<lower=0> measblkse; // start/end rows of blocks
+  array[Ng, p] int<lower=1> measorder; // reordering to get blocks
+  array[Ng, p] int<lower=1> measrevord; // reverse ordering
+  
   int ngh;
   vector[ngh] ghnode;
   vector[ngh] ghwt;  
@@ -1101,8 +1106,14 @@ model { // N.B.: things declared in the model block do not get saved in the outp
 
   /* log-likelihood */
   if (use_cov && !pri_only) {
+    int blkcounter = 0;
     for (g in 1:Ng) {
-      target += wishart_lpdf((N[g] - 1) * Sstar[g] | N[g] - 1, Sigma[g]);
+      for (bb in 1:measnblk[g]) {
+	int blkstart = measblkse[blkcounter + bb, 1];
+	int blkend = measblkse[blkcounter + bb, 2];
+	target += wishart_lpdf((N[g] - 1) * Sstar[g, measorder[g, blkstart:blkend], measorder[g, blkstart:blkend]] | N[g] - 1, Sigma[g, measorder[g, blkstart:blkend], measorder[g, blkstart:blkend]]);
+      }
+      blkcounter += measnblk[g];
       if (Nx[g] > 0) {
 	array[Nx[g]] int xvars = Xdatvar[g, 1:Nx[g]];
 	target += -wishart_lpdf((N[g] - 1) * Sstar[g, xvars, xvars] | N[g] - 1, Sigma[g, xvars, xvars]);
