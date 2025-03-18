@@ -1126,6 +1126,7 @@ model { // N.B.: things declared in the model block do not get saved in the outp
     int grpidx;
     int r1;
     int r2;
+    int blkcounter = 0;
         
     for (mm in 1:Np) {
       obsidx = Obsvar[mm,];
@@ -1149,18 +1150,44 @@ model { // N.B.: things declared in the model block do not get saved in the outp
 	    target += log_sum_exp(marglik);
 	  }
 	}
-      } else if (!use_suff) {
-	target += multi_normal_lpdf(YXstar[r1:r2,1:Nobs[mm]] | Mu[grpidx, obsidx[1:Nobs[mm]]], Sigma[grpidx, obsidx[1:Nobs[mm]], obsidx[1:Nobs[mm]]]);
-
-	if (Nx[mm] > 0) {
-	  target += -multi_normal_lpdf(YXstar[r1:r2,xdatidx[1:Nx[mm]]] | Mu[grpidx, xidx[1:Nx[mm]]], Sigma[grpidx, xidx[1:Nx[mm]], xidx[1:Nx[mm]]]);
+      } else if (!missing) {
+	for (bb in 1:measnblk[mm]) {
+	  int blkstart = measblkse[blkcounter + bb, 1];
+	  int blkend = measblkse[blkcounter + bb, 2];
+	  if (!use_suff) {
+	    target += multi_normal_lpdf(YXstar[r1:r2, measorder[mm, blkstart:blkend]] | Mu[grpidx, measorder[mm, blkstart:blkend]], Sigma[mm, measorder[mm, blkstart:blkend], measorder[mm, blkstart:blkend]]);
+	  } else {
+	    matrix[blkend - blkstart + 2, blkend - blkstart + 2] siginvblk = rep_matrix(0, blkend - blkstart + 2, blkend - blkstart + 2);
+	    siginvblk[1:(blkend - blkstart + 1), 1:(blkend - blkstart + 1)] = Sigmainv[mm, measorder[mm, blkstart:blkend], measorder[mm, blkstart:blkend]];
+	    target += multi_normal_suff(YXbarstar[mm, measorder[mm, blkstart:blkend]], Sstar[mm, measorder[mm, blkstart:blkend], measorder[mm, blkstart:blkend]], Mu[grpidx, measorder[mm, blkstart:blkend]], siginvblk, r2 - r1 + 1);
+	  }
+	}
+	blkcounter += measnblk[mm];
+	if (use_suff) {
+	  // needed because we ignored the log-determinant above
+	  target += -.5 * (r2 - r1 + 1) * Sigmainv[mm, Nobs[mm] + 1, Nobs[mm] + 1];
+	  if (Nx[mm] > 0) {
+	    target += -multi_normal_suff(YXbarstar[mm, xdatidx[1:Nx[mm]]], Sstar[mm, xdatidx[1:Nx[mm]], xdatidx[1:Nx[mm]]], Mu[grpidx, xidx[1:Nx[mm]]], sig_inv_update(Sigmainv[grpidx], xidx, Nx[mm], p + q, logdetSigma_grp[grpidx]), r2 - r1 + 1);
+	  }
+	} else {
+	  if (Nx[mm] > 0) {
+	    target += -multi_normal_lpdf(YXstar[r1:r2,xdatidx[1:Nx[mm]]] | Mu[grpidx, xidx[1:Nx[mm]]], Sigma[grpidx, xidx[1:Nx[mm]], xidx[1:Nx[mm]]]);
+	  }
 	}
       } else {
-	// sufficient stats
-	target += multi_normal_suff(YXbarstar[mm, 1:Nobs[mm]], Sstar[mm, 1:Nobs[mm], 1:Nobs[mm]], Mu[grpidx, obsidx[1:Nobs[mm]]], Sigmainv[mm, 1:(Nobs[mm] + 1), 1:(Nobs[mm] + 1)], r2 - r1 + 1);
+	if (!use_suff) {
+	  target += multi_normal_lpdf(YXstar[r1:r2,1:Nobs[mm]] | Mu[grpidx, obsidx[1:Nobs[mm]]], Sigma[grpidx, obsidx[1:Nobs[mm]], obsidx[1:Nobs[mm]]]);
+
+	  if (Nx[mm] > 0) {
+	    target += -multi_normal_lpdf(YXstar[r1:r2,xdatidx[1:Nx[mm]]] | Mu[grpidx, xidx[1:Nx[mm]]], Sigma[grpidx, xidx[1:Nx[mm]], xidx[1:Nx[mm]]]);
+	  }
+	} else {
+	  // sufficient stats
+	  target += multi_normal_suff(YXbarstar[mm, 1:Nobs[mm]], Sstar[mm, 1:Nobs[mm], 1:Nobs[mm]], Mu[grpidx, obsidx[1:Nobs[mm]]], Sigmainv[mm, 1:(Nobs[mm] + 1), 1:(Nobs[mm] + 1)], r2 - r1 + 1);
       
-	if (Nx[mm] > 0) {
-	  target += -multi_normal_suff(YXbarstar[mm, xdatidx[1:Nx[mm]]], Sstar[mm, xdatidx[1:Nx[mm]], xdatidx[1:Nx[mm]]], Mu[grpidx, xidx[1:Nx[mm]]], sig_inv_update(Sigmainv[grpidx], xidx, Nx[mm], p + q, logdetSigma_grp[grpidx]), r2 - r1 + 1);
+	  if (Nx[mm] > 0) {
+	    target += -multi_normal_suff(YXbarstar[mm, xdatidx[1:Nx[mm]]], Sstar[mm, xdatidx[1:Nx[mm]], xdatidx[1:Nx[mm]]], Mu[grpidx, xidx[1:Nx[mm]]], sig_inv_update(Sigmainv[grpidx], xidx, Nx[mm], p + q, logdetSigma_grp[grpidx]), r2 - r1 + 1);
+	  }
 	}
       }
     }
