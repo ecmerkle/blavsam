@@ -1090,12 +1090,14 @@ transformed parameters {
   }
 
   // for computing mvn with sufficient stats
-  for (g in 1:Ng) {
-    Sigmainv_grp[g] = inverse_spd(Sigma[g]);
-    logdetSigma_grp[g] = log_determinant(Sigma[g]);
-  }
-  for (patt in 1:Np) {    
-    Sigmainv[patt, 1:(Nobs[patt] + 1), 1:(Nobs[patt] + 1)] = sig_inv_update(Sigmainv_grp[grpnum[patt]], Obsvar[patt,], Nobs[patt], p + q, logdetSigma_grp[grpnum[patt]]);
+  if (use_suff) {
+    for (g in 1:Ng) {
+      Sigmainv_grp[g] = inverse_spd(Sigma[g]);
+      logdetSigma_grp[g] = log_determinant(Sigma[g]);
+    }
+    for (patt in 1:Np) {    
+      Sigmainv[patt, 1:(Nobs[patt] + 1), 1:(Nobs[patt] + 1)] = sig_inv_update(Sigmainv_grp[grpnum[patt]], Obsvar[patt,], Nobs[patt], p + q, logdetSigma_grp[grpnum[patt]]);
+    }
   }
 }
 model { // N.B.: things declared in the model block do not get saved in the output, which is okay here
