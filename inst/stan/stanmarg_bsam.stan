@@ -1091,9 +1091,18 @@ transformed parameters {
 
   // for computing mvn with sufficient stats
   if (use_suff) {
+    int blkcounter = 0;
     for (g in 1:Ng) {
-      Sigmainv_grp[g] = inverse_spd(Sigma[g]);
-      logdetSigma_grp[g] = log_determinant(Sigma[g]);
+      Sigmainv_grp[g] = rep_matrix(0, p + q, p + q);
+      logdetSigma_grp[g] = 0;
+      for (bb in 1:measnblk[g]) {
+	int blkstart = measblkse[blkcounter + bb, 1];
+	int blkend = measblkse[blkcounter + bb, 2];
+      
+	Sigmainv_grp[g, measorder[g, blkstart:blkend], measorder[g, blkstart:blkend]] = inverse_spd(Sigma[g, measorder[g, blkstart:blkend], measorder[g, blkstart:blkend]]);
+	logdetSigma_grp[g] += log_determinant(Sigma[g, measorder[g, blkstart:blkend], measorder[g, blkstart:blkend]]);
+      }
+      blkcounter += measnblk[g];
     }
     for (patt in 1:Np) {    
       Sigmainv[patt, 1:(Nobs[patt] + 1), 1:(Nobs[patt] + 1)] = sig_inv_update(Sigmainv_grp[grpnum[patt]], Obsvar[patt,], Nobs[patt], p + q, logdetSigma_grp[grpnum[patt]]);
