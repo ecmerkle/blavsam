@@ -275,7 +275,7 @@ functions { // you can use these in R following `rstan::expose_stan_functions("f
     return out;
   }
 
-  real cond_density(real theta, vector Mu, vector SDvec, vector Lambda_y, vector Tau, array[] int nlevs, int nvar, array[] int YXo) {
+  real cond_density(real theta, vector Mu, vector SDvec, vector Lambda_y, matrix Tau, int nvar) {
     vector[nvar] condmn;
     array[nvar] real probs;
     real out;
@@ -283,15 +283,14 @@ functions { // you can use these in R following `rstan::expose_stan_functions("f
     condmn = Mu + Lambda_y * theta;
     
     for (i in 1:nvar) {
-      array[2] real runtau = get_taus(Tau, i, condmn[i], SDvec[i], YXo[i], nlevs);
       //array[2] real phis;
 
       //phis[1] = normal_lcdf(runtau[1] | condmn[i], SDvec[i]);
       //phis[2] = normal_lcdf(runtau[2] | condmn[i], SDvec[i]);
 
       //logprobs[i] = phis[2] + log1m_exp(phis[1] - phis[2]);
-      probs[i] = bernoulli_lpmf(1 | Phi_approx((runtau[2] - condmn[i])/SDvec[i]) - Phi_approx((runtau[1] - condmn[i])/SDvec[i]));
-      if (is_inf(probs[i])) probs[i] = -20;
+      probs[i] = bernoulli_lpmf(1 | Phi_approx((Tau[i,2] - condmn[i])/SDvec[i]) - Phi_approx((Tau[i,1] - condmn[i])/SDvec[i]));
+      //if (is_inf(probs[i])) probs[i] = -20;
     }
 
     out = sum(probs);
@@ -299,8 +298,7 @@ functions { // you can use these in R following `rstan::expose_stan_functions("f
     return out;
   }
 
-  real trunc_normal_rng(real Mu, real SD, int varidx, array[] int nlevs, int YXo, vector Tau) {
-    array[2] real runtau = get_taus(Tau, varidx, Mu, SD, YXo, nlevs);
+  real trunc_normal_rng(real Mu, real SD, row_vector runtau) {
     real p_lb = normal_cdf(runtau[1] | Mu, SD);
     real p_ub = normal_cdf(runtau[2] | Mu, SD);
     real u = uniform_rng(p_lb, p_ub);
@@ -344,25 +342,6 @@ functions { // you can use these in R following `rstan::expose_stan_functions("f
       out[g] = out[g, psirevord[g], psirevord[g]];
     }
 
-    return out;
-  }
-  
-  // obtain lower and upper taus based on observed ordinal data
-  array[] real get_taus(vector Tau, int varidx, real Mu, real SD, int YXo, array[] int nlevs) {
-    array[2] real out;
-    int vecpos = YXo - 1;
-    if (varidx > 1) vecpos += sum(nlevs[1:(varidx - 1)]) - varidx + 1;
-
-    if (YXo == 1) {
-      out[1] = -30*SD + Mu;
-      out[2] = Tau[(vecpos + 1)];
-    } else if (YXo == nlevs[varidx]) {
-      out[1] = Tau[vecpos];
-      out[2]= 30*SD + Mu;
-    } else {
-      out[1] = Tau[vecpos];
-      out[2] = Tau[(vecpos + 1)];
-    }
     return out;
   }
 }
@@ -960,6 +939,7 @@ transformed parameters {
   array[Ng] matrix[sum(nlevs) - Nord, 1] Tau;
   vector[len_free[15]] Tau_free;
   //real tau_jacobian;
+  array[Ntot] matrix[Nord, 2] Tau_by_obs;
   
   vector[len_free[1]] lambda_y_primn;
   vector[len_free[13]] nu_primn;
@@ -1057,6 +1037,33 @@ transformed parameters {
     }
   }
 
+  if (Nord > 0) {
+    for (mm in 1:Np) {
+      int r1 = startrow[mm];
+      int r2 = endrow[mm];
+      for (i in r1:r2) {
+	for (j in 1:Nord) {
+	  int tmpobs = YXo[i,j];
+	  int vecpos = tmpobs - 1;
+	  if (j > 1) {
+	    vecpos += sum(nlevs[1:(j - 1)]) - j + 1;
+	  }
+
+	  if (tmpobs == 1) {
+	    Tau_by_obs[i,j,1] = -30;
+	    Tau_by_obs[i,j,2] = Tau[grpnum[mm], vecpos + 1, 1];
+	  } else if (tmpobs == nlevs[j]) {
+	    Tau_by_obs[i,j,1] = Tau[grpnum[mm], vecpos, 1];
+	    Tau_by_obs[i,j,2] = 30;
+	  } else {
+	    Tau_by_obs[i,j,1] = Tau[grpnum[mm], vecpos, 1];
+	    Tau_by_obs[i,j,2] = Tau[grpnum[mm], vecpos + 1, 1];
+	  }
+	}
+      }
+    }
+  }
+  
   // prior vectors
   if (wigind) {
     lambda_y_primn = fill_prior(Lambda_y_free, lambda_y_mn, w1skel);
@@ -1152,11 +1159,11 @@ model { // N.B.: things declared in the model block do not get saved in the outp
 	  for (qq in 1:m) {
 	    vector[ngh] marglik = log(ghwt);
 	    for (gg in 1:ngh) {
-	      marglik[gg] += cond_density(ghnode[gg] * sqrt(Psi_tmp[grpidx, qq, qq]), // + Alpha[grpidx, m, 1],
+	      marglik[gg] += cond_density(ghnode[gg], // * sqrt(Psi_tmp[grpidx, qq, qq]), // + Alpha[grpidx, m, 1],
 					  Mu[grpidx, obsidx[1:Nobs[mm]]],
 					  diagonal(Theta_sd[grpidx, obsidx[1:Nobs[mm]], obsidx[1:Nobs[mm]]]),
 					  Lambda_y[grpidx, obsidx[1:Nobs[mm]], qq],
-					  Tau[grpidx,, 1], nlevs, Nordobs[mm], YXo[i, 1:Nordobs[mm]]);
+					  Tau_by_obs[i], Nordobs[mm]);
 	    }
 	    target += log_sum_exp(marglik);
 	  }
@@ -1442,7 +1449,7 @@ generated quantities { // these matrices are saved in the output but do not figu
 	// FIXME cannot handle combinations of ordinal and continuous
 	if (ord) {
 	  for (j in 1:Nord) {
-	    YXstar_gibbs[ridx, obsidx[j]] = trunc_normal_rng(Nu[g, obsidx[j], 1] + Lambda[g, obsidx[j]] * eta[ridx], Theta_sd_dum[g, obsidx[j], obsidx[j]], obsidx[j], nlevs, YXo[ridx, obsidx[j]], Tau[g,,1]);
+	    YXstar_gibbs[ridx, obsidx[j]] = trunc_normal_rng(Nu[g, obsidx[j], 1] + Lambda[g, obsidx[j]] * eta[ridx], Theta_sd_dum[g, obsidx[j], obsidx[j]], Tau_by_obs[ridx, j, 1:2]);
 	  }
 	}
 	eta[ridx] = multi_normal_cholesky_rng(D * (d + Lamt_Thet_inv * (YXstar_gibbs[ridx] - to_vector(Nu[g]))), Dchol);
