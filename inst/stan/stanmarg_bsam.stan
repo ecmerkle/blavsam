@@ -1539,7 +1539,7 @@ generated quantities { // these matrices are saved in the output but do not figu
 	matrix[m,m] Psiblk = Psi[gg, psiorder[gg], psiorder[gg]];
 	matrix[m,m] residord = residcp[psiorder[gg], psiorder[gg]];
 	for (k in 1:sum(psinblk)) {
-	  int blkgrp = psiblkse[k, 4];	
+	  int blkgrp = psiblkse[k, 4];
 
 	  if (blkgrp == gg) {
 	    int srow = psiblkse[k, 1];
@@ -1549,7 +1549,6 @@ generated quantities { // these matrices are saved in the output but do not figu
 	    if (erow > srow) {
 	      Psiblk[srow:erow, srow:erow] = inv_wishart_rng((r2 - r1 + 1) + Psi_prior_shape[gg, origrows[1], origrows[1]], residord[srow:erow, srow:erow] + Psi_prior_rate[gg, origrows, origrows]);
 	    } else {
-	      // this shouldn't happen
 	      // even if Psi was originally fixed, we sample in this step
 	      Psiblk[srow, srow] = inv_gamma_rng(.5 * (r2 - r1 + 1) + Psi_prior_shape[gg, origrows[1], origrows[1]], .5 * residord[srow, srow] + Psi_prior_rate[gg, origrows[1], origrows[1]]);
 	    }
@@ -1557,14 +1556,6 @@ generated quantities { // these matrices are saved in the output but do not figu
 	}
 	Psi[gg] = Psiblk[psirevord[gg], psirevord[gg]];
       }
-      
-      /* if (len_free[9] > 0) { */
-      /* 	for (ii in 1:m) { */
-      /* 	  if (is_inf(Psi_skeleton[gg, ii, ii])) { */
-      /* 	    Psi[gg, ii, ii] = inv_gamma_rng(.5 * (r2 - r1 + 1) + Psi_prior_shape[gg, ii, ii], .5 * residcp[ii, ii] + Psi_prior_rate[gg, ii, ii]); */
-      /* 	  } */
-      /* 	} */
-      /* } */
     }
   }
   // END OF GIBBS SAMPLER
