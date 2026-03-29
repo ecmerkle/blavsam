@@ -1,13 +1,15 @@
 /* This file is based on LERSIL.stan by Ben Goodrich.
    https://github.com/bgoodri/LERSIL */
 functions { // you can use these in R following `rstan::expose_stan_functions("foo.stan")`
-  array[] vector sample_eta(array[] vector eta, array[] vector YXstar, array[] vector YXo, matrix B, matrix Psi, matrix Lambda, matrix Thetmat, matrix Theta_sd_dum, matrix Nu, matrix Alpha, vector Tau, array[] int obsidx, int Ndum_x, array[] int dum_lv_x_idx, int ord, int Nord, int nlevs, int p, int m, int r1, int r2) {
+  array[] vector sample_eta_rng(array[] vector etaold, array[] vector YXstar, array[,] int YXo, matrix B, matrix Psi, matrix Lambda, matrix Thetmat, matrix Theta_sd_dum, matrix Nu, matrix Alpha, vector Tau, array[] int obsidx, int Ndum, array[] int dum_ov_idx, array[] int dum_lv_idx, int Ndum_x, array[] int dum_lv_x_idx, int ord, int Nord, array[] int nlevs, int p, int m, int r1, int r2) {
     matrix[m, m] IBinv;
     matrix[m, p] Lamt_Thet_inv;
     matrix[m, m] Psi0_inv;
     matrix[m, m] D;
     matrix[m, m] Dchol;
     vector[m] d;
+    array[dims(YXstar)[1]] vector[p] YXstar_gibbs = YXstar;
+    array[dims(etaold)[1]] vector[m] eta;
 
     if (Ndum_x > 0) {
       IBinv[dum_lv_x_idx[1:Ndum_x], dum_lv_x_idx[1:Ndum_x]] = rep_matrix(0, Ndum_x, Ndum_x);
@@ -30,19 +32,19 @@ functions { // you can use these in R following `rstan::expose_stan_functions("f
       // FIXME cannot handle combinations of ordinal and continuous
       if (ord) {
 	for (j in 1:Nord) {
-	  YXstar[ridx, obsidx[j]] = trunc_normal_rng(Nu[obsidx[j], 1] + Lambda[obsidx[j]] * eta[ridx], Theta_sd_dum[obsidx[j], obsidx[j]], obsidx[j], nlevs, YXo[ridx, obsidx[j]], Tau);
+	  YXstar_gibbs[ridx, obsidx[j]] = trunc_normal_rng(Nu[obsidx[j], 1] + Lambda[obsidx[j]] * etaold[ridx], Theta_sd_dum[obsidx[j], obsidx[j]], obsidx[j], nlevs, YXo[ridx, obsidx[j]], Tau);
 	}
       }
-      eta[ridx] = multi_normal_cholesky_rng(D * (d + Lamt_Thet_inv * (YXstar[ridx] - to_vector(Nu))), Dchol);
+      eta[ridx] = multi_normal_cholesky_rng(D * (d + Lamt_Thet_inv * (YXstar_gibbs[ridx] - to_vector(Nu))), Dchol);
 
       if (Ndum > 0) {
-	eta[ridx, dum_lv_idx[1:Ndum[mm]]] = YXstar[ridx, dum_ov_idx[1:Ndum[mm]]];
+	eta[ridx, dum_lv_idx[1:Ndum]] = YXstar_gibbs[ridx, dum_ov_idx[1:Ndum]];
       }
     }
     return eta;
   }
 
-  vector sample_loc(array[] vector eta, matrix Psi_inv, matrix Alpha_skeleton, matrix B_skeleton, matrix Omega_inv, vector gamma0, int matdim, int m, int r1, int r2) {
+  vector sample_loc_rng(array[] vector eta, matrix Psi_inv, matrix Alpha_skeleton, matrix B_skeleton, matrix Omega_inv, vector gamma0, int matdim, int m, int r1, int r2) {
     vector[matdim] params;
     matrix[matdim, matdim] FVF = rep_matrix(0, matdim, matdim);
     vector[matdim] FVz = rep_vector(0, matdim);
@@ -89,7 +91,7 @@ functions { // you can use these in R following `rstan::expose_stan_functions("f
     return params;
   }
 
-  matrix sample_psi(array[] vector eta, matrix Alpha, matrix B, matrix Psi, matrix Psi_prior_shape, matrix Psi_prior_rate, array[] int psinblk, array[,] int psiblkse, array[] int psiorder, array[] int psirevord, int gg, int m, int r1, int r2) {
+  matrix sample_psi_rng(array[] vector eta, matrix Alpha, matrix B, matrix Psi, matrix Psi_prior_shape, matrix Psi_prior_rate, array[] int psinblk, array[,] int psiblkse, array[] int psiorder, array[] int psirevord, int gg, int m, int r1, int r2) {
     matrix[m, m] residcp = rep_matrix(0, m, m);
     matrix[m,m] Psiblk = Psi[psiorder, psiorder];
     
@@ -1527,10 +1529,10 @@ generated quantities { // these matrices are saved in the output but do not figu
     for (mm in 1:Np) {
       int g = grpnum[mm];
       vector[matdim[g]] params;
-      eta = sample_eta(eta, YXstar, YXo, rep_matrix(0, m, m), Psi_tmp[g], Lambda[g], Thetmat[g], Thet_sd_dum[g], Nu[g], Alpha[g], Tau[g,,1], obsidx[mm], Ndum_x[mm], dum_lv_x_idx[mm], ord, Nord, nlevs, p, m, startrow[mm], endrow[mm]);
+      eta = sample_eta_rng(eta, YXstar, YXo, rep_matrix(0, m, m), Psi_tmp[g], Lambda[g], Thetmat[g], Theta_sd_dum[g], Nu[g], Alpha[g], Tau[g,,1], Obsvar[mm,], Ndum[mm], dum_ov_idx[mm], dum_lv_idx[mm], Ndum_x[mm], dum_lv_x_idx[mm], ord, Nord, nlevs, p, m, startrow[mm], endrow[mm]);
 
       if (len_free[4] + len_free[14] > 0) {
-	params = sample_loc(eta, inverse_spd(Psi_tmp[g]), Alpha_skeleton[g], B_skeleton[g], Omega_inv[mm], gamma0[mm], matdim[g], m, startrow[mm], endrow[mm]);
+	params = sample_loc_rng(eta, inverse_spd(Psi_tmp[g]), Alpha_skeleton[g], B_skeleton[g], Omega_inv[mm], gamma0[mm], matdim[g], m, startrow[mm], endrow[mm]);
 	// now put parameters in free parameter vectors
 	if (len_alph > 0) {
 	  for (j in 1:len_alph) {
@@ -1552,7 +1554,7 @@ generated quantities { // these matrices are saved in the output but do not figu
     for (mm in 1:Np) {
       int g = grpnum[mm];
       if (len_free[9] > 0) {
-	Psi[g] = sample_psi(eta, Alpha[g], B[g], Psi[g], Psi_prior_shape[g], Psi_prior_rate[g], psinblk, psiblkse, psiorder[g], psirevord[g], g, m, startrow[mm], endrow[mm]);
+	Psi[g] = sample_psi_rng(eta, Alpha[g], B[g], Psi[g], Psi_prior_shape[g], Psi_prior_rate[g], psinblk, psiblkse, psiorder[g], psirevord[g], g, m, startrow[mm], endrow[mm]);
       }
     }
   }
@@ -1566,14 +1568,14 @@ generated quantities { // these matrices are saved in the output but do not figu
       int r1 = startrow[mm];
       int r2 = endrow[mm];
       int g = grpnum[mm];
-
-      eta[r1:r2] = sample_eta(eta, YXstar, YXo, B[g], Psi[g], Lambda[g], Thetmat[g], Thet_sd_dum[g], Nu[g], Alpha[g], Tau[g,,1], Obsvar[mm,], Ndum_x[mm], dum_lv_x_idx[mm], ord, Nord, nlevs, p, m, r1, r2);
+      vector[matdim[g]] params;
+      
+      eta[r1:r2] = sample_eta_rng(eta, YXstar, YXo, B[g], Psi[g], Lambda[g], Thetmat[g], Theta_sd_dum[g], Nu[g], Alpha[g], Tau[g,,1], Obsvar[mm,], Ndum[mm], dum_ov_idx[mm], dum_lv_idx[mm], Ndum_x[mm], dum_lv_x_idx[mm], ord, Nord, nlevs, p, m, r1, r2);
 	
       // sample alpha, beta
-      pidx = 1;
       Psi_inv = inverse_spd(Psi[g]);
 
-      params = sample_loc(eta, Psi_inv, Alpha_skeleton[g], B_skeleton[g], Omega_inv[mm], gamma0[mm], matdim[g], m, r1, r2);
+      params = sample_loc_rng(eta, Psi_inv, Alpha_skeleton[g], B_skeleton[g], Omega_inv[mm], gamma0[mm], matdim[g], m, r1, r2);
 
       // now put parameters in free parameter vectors
       for (j in 1:len_alph) {
@@ -1600,7 +1602,7 @@ generated quantities { // these matrices are saved in the output but do not figu
 	r2 = sum(N[1:gg]);
       }
 
-      Psi[gg] = sample_psi(eta, Alpha[gg], B[gg], Psi[gg], Psi_prior_shape[gg], Psi_prior_rate[gg], psinblk, psiorder[gg], psirevord[gg], gg, m, r1, r2);
+      Psi[gg] = sample_psi_rng(eta, Alpha[gg], B[gg], Psi[gg], Psi_prior_shape[gg], Psi_prior_rate[gg], psinblk, psiblkse, psiorder[gg], psirevord[gg], gg, m, r1, r2);
     }
   }
   // END OF GIBBS SAMPLER
