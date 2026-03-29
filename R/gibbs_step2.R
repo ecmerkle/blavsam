@@ -71,10 +71,11 @@ gibbs_step2 <- function(fit, step1fit) {
   corrfac <- scinit$corrfac
 
   samps <- vector("list", niter)
+  draws1 <- sample(1:niter, niter, replace = TRUE)
   for (i in 1:niter) {
     ## use blavaan:::fill_params to fill in step 1 model with step1samps;
     ## get filled matrices from GLIST
-    lavmod <- blavaan:::fill_params(step1samps[i,], step1fit@Model, parTable(step1fit))
+    lavmod <- blavaan:::fill_params(step1samps[draws1[i],], step1fit@Model, parTable(step1fit))
     mats <- lavmod@GLIST ## TODO Ng > 1
     Lambda <- mats$lambda
     Theta <- mats$theta

@@ -1,6 +1,127 @@
 /* This file is based on LERSIL.stan by Ben Goodrich.
    https://github.com/bgoodri/LERSIL */
 functions { // you can use these in R following `rstan::expose_stan_functions("foo.stan")`
+  array[] vector sample_eta(array[] vector eta, array[] vector YXstar, array[] vector YXo, matrix B, matrix Psi, matrix Lambda, matrix Thetmat, matrix Theta_sd_dum, matrix Nu, matrix Alpha, vector Tau, array[] int obsidx, int Ndum_x, array[] int dum_lv_x_idx, int ord, int Nord, int nlevs, int p, int m, int r1, int r2) {
+    matrix[m, m] IBinv;
+    matrix[m, p] Lamt_Thet_inv;
+    matrix[m, m] Psi0_inv;
+    matrix[m, m] D;
+    matrix[m, m] Dchol;
+    vector[m] d;
+
+    if (Ndum_x > 0) {
+      IBinv[dum_lv_x_idx[1:Ndum_x], dum_lv_x_idx[1:Ndum_x]] = rep_matrix(0, Ndum_x, Ndum_x);
+      for (j in 1:Ndum_x) {
+	IBinv[dum_lv_x_idx[j], dum_lv_x_idx[j]] = 1;
+      }
+    }
+      
+    Psi0_inv = inverse_spd( quad_form_sym(Psi, IBinv') );
+    Lamt_Thet_inv = Lambda' * inverse_spd( quad_form_sym(Thetmat, Theta_sd_dum) ); // mxp
+      
+    D = inverse_spd( Lamt_Thet_inv * Lambda + Psi0_inv );
+    // eq (20) fsr paper
+    // D = quad_form_sym(S[mm, 1:p, 1:p] - quad_form_sym(Theta_r[g], Theta_sd[g]), (Lamt_Thet_inv' * inverse_spd( Lamt_Thet_inv * Lambda[g] + Psi0_inv )));
+
+    Dchol = cholesky_decompose(D);
+    d = to_vector(Psi0_inv * IBinv * Alpha);
+
+    for (ridx in r1:r2) {
+      // FIXME cannot handle combinations of ordinal and continuous
+      if (ord) {
+	for (j in 1:Nord) {
+	  YXstar[ridx, obsidx[j]] = trunc_normal_rng(Nu[obsidx[j], 1] + Lambda[obsidx[j]] * eta[ridx], Theta_sd_dum[obsidx[j], obsidx[j]], obsidx[j], nlevs, YXo[ridx, obsidx[j]], Tau);
+	}
+      }
+      eta[ridx] = multi_normal_cholesky_rng(D * (d + Lamt_Thet_inv * (YXstar[ridx] - to_vector(Nu))), Dchol);
+
+      if (Ndum > 0) {
+	eta[ridx, dum_lv_idx[1:Ndum[mm]]] = YXstar[ridx, dum_ov_idx[1:Ndum[mm]]];
+      }
+    }
+    return eta;
+  }
+
+  vector sample_loc(array[] vector eta, matrix Psi_inv, matrix Alpha_skeleton, matrix B_skeleton, matrix Omega_inv, vector gamma0, int matdim, int m, int r1, int r2) {
+    vector[matdim] params;
+    matrix[matdim, matdim] FVF = rep_matrix(0, matdim, matdim);
+    vector[matdim] FVz = rep_vector(0, matdim);
+    matrix[matdim, matdim] Dinv;
+    int pidx = 1;
+
+    // construct F_i matrix
+    // FIXME does not handle equality constraints
+    for (ridx in r1:r2) {
+      matrix[m, matdim] etamat = rep_matrix(0, m, matdim);
+      vector[m] z = eta[ridx];
+      pidx = 1;
+      
+      for (r in 1:m) {
+	real askel = Alpha_skeleton[r, 1];
+	if (is_inf(askel)) {
+	  etamat[r, pidx] = 1;
+	  pidx += 1;
+	} else if (askel != 0) {
+	  z[r] += -askel;
+	}
+	for (c in 1:m) {
+	  real bskel = B_skeleton[r, c];
+	  if (is_inf(bskel)) {
+	    etamat[r, pidx] = eta[ridx, c];
+	    pidx += 1;
+	  } else if (bskel != 0) {
+	    z[r] += -bskel * eta[ridx, c];
+	  }
+	}
+      }
+	
+      FVF += etamat' * Psi_inv * etamat;
+      FVz += etamat' * Psi_inv * z;
+    }
+
+    FVF += Omega_inv[matdim, matdim];
+    FVz += Omega_inv[matdim, matdim] * gamma0[matdim];
+    
+    Dinv = inverse_spd(FVF);
+
+    params = multi_normal_rng(Dinv * FVz, Dinv);
+
+    return params;
+  }
+
+  matrix sample_psi(array[] vector eta, matrix Alpha, matrix B, matrix Psi, matrix Psi_prior_shape, matrix Psi_prior_rate, array[] int psinblk, array[,] int psiblkse, array[] int psiorder, array[] int psirevord, int gg, int m, int r1, int r2) {
+    matrix[m, m] residcp = rep_matrix(0, m, m);
+    matrix[m,m] Psiblk = Psi[psiorder, psiorder];
+    
+    // loop over n, get cross product of residuals (eta - (alpha + B * eta))
+    for (ridx in r1:r2) {
+      residcp += tcrossprod(to_matrix(eta[ridx] - (to_vector(Alpha[gg]) + B[gg] * eta[ridx])));
+    }
+
+    if (sum(psinblk) > 0) {
+      matrix[m,m] residord = residcp[psiorder, psiorder];
+      for (k in 1:sum(psinblk)) {
+	int blkgrp = psiblkse[k, 4];
+
+	if (blkgrp == gg) {
+	  int srow = psiblkse[k, 1];
+	  int erow = psiblkse[k, 2];
+	  array[erow - srow + 1] int origrows = psirevord[srow:erow];
+	    
+	  if (erow > srow) {
+	    Psiblk[srow:erow, srow:erow] = inv_wishart_rng((r2 - r1 + 1) + Psi_prior_shape[origrows[1], origrows[1]], residord[srow:erow, srow:erow] + Psi_prior_rate[origrows, origrows]);
+	  } else {
+	    // even if Psi was originally fixed, we sample in this step
+	    Psiblk[srow, srow] = inv_gamma_rng(.5 * (r2 - r1 + 1) + Psi_prior_shape[origrows[1], origrows[1]], .5 * residord[srow, srow] + Psi_prior_rate[origrows[1], origrows[1]]);
+	  }
+	}
+      }
+    }
+
+    return Psiblk[psirevord, psirevord];
+  }
+    
+
   /*
     Fills in the elements of a coefficient matrix containing some mix of 
     totally free, free subject to a sign constraint, and fixed elements
@@ -1271,9 +1392,6 @@ generated quantities { // these matrices are saved in the output but do not figu
   array[Ng] matrix[m + n, 1] Alpha;
   array[Ng] matrix[m, m] Psi;
   array[Ng] matrix[m, m] PS;
-  array[Ng] matrix[m, m] Psi_sd;
-  array[Ng] matrix[m, m] Psi_r_lower;
-  array[Ng] matrix[m, m] Psi_r;
   matrix[m, m] Psi_inv;
   array[Ng] matrix[p, p] Theta_sd_dum = Theta_sd;
   array[Ng] matrix[p, p] Thetmat;
@@ -1333,7 +1451,7 @@ generated quantities { // these matrices are saved in the output but do not figu
   array[Ng] matrix[m, m] Psi_prior_shape;
   array[Ng] matrix[m, m] Psi_prior_rate;
   real<lower=0, upper=1> ppp;
-    
+  
   // Begin with Gibbs sampler of structural model
   // build prior vector/matrix for structural parameters and
   // fill structural matrices with initial values
@@ -1344,8 +1462,8 @@ generated quantities { // these matrices are saved in the output but do not figu
     b_primn = to_vector(b_mn);
     alpha_primn = to_vector(alpha_mn);
   }
-  ly_sign = sign_constrain_load(Lambda_y_free, len_free[1], lam_y_sign);
 
+  ly_sign = sign_constrain_load(Lambda_y_free, len_free[1], lam_y_sign);
   for (g in 1:Ng) {
     alpha_prior[g] = fill_matrix(alpha_primn, Alpha_skeleton[g], w14skel, g_start14[g,1], g_start14[g,2]);
     alpha_prior_prec[g] = fill_matrix(pow(to_vector(alpha_sd), -2), Alpha_skeleton[g], w14skel, g_start14[g,1], g_start14[g,2]);
@@ -1358,15 +1476,6 @@ generated quantities { // these matrices are saved in the output but do not figu
     Lambda[g] = fill_matrix(ly_sign, Lambda_y_skeleton[g], w1skel, g_start1[g,1], g_start1[g,2]);
     B[g] = fill_matrix(B_free, B_skeleton[g], w4skel, g_start4[g,1], g_start4[g,2]);
     Alpha[g] = fill_matrix(Alpha_free, Alpha_skeleton[g], w14skel, g_start14[g,1], g_start14[g,2]);
-    Psi_r_lower[g] = fill_matrix(rep_vector(0, len_free[10]), Psi_r_skeleton[g], w10skel, g_start10[g,1], g_start10[g,2]);
-    Psi_r[g] = Psi_r_lower[g] + transpose(Psi_r_lower[g]) - diag_matrix(rep_vector(1, m));
-    Psi_sd[g] = fill_matrix(Psi_sd_free, Psi_skeleton[g], w9skel, g_start9[g,1], g_start9[g,2]);
-    Psi[g] = quad_form_sym(Psi_r[g], Psi_sd[g]);
-  }
-
-  YXstar_gibbs = YXstar;
-  for (i in 1:Ntot) {
-    eta[i] = rep_vector(0, m);
   }
 
   // arrange prior info
@@ -1400,7 +1509,7 @@ generated quantities { // these matrices are saved in the output but do not figu
       }
     }
   }
-
+  
   for (g in 1:Ng) {
     matrix[p, p] Thtmp = fill_matrix(Theta_r_free, Theta_r_skeleton[g], w7skel, g_start7[g,1], g_start7[g,2]);
     Thetmat[g] = Thtmp + transpose(Thtmp) - diag_matrix(rep_vector(1, p));
@@ -1409,100 +1518,62 @@ generated quantities { // these matrices are saved in the output but do not figu
   if (sum(thetanblk) > 0) {
     Thetmat = fill_cov(Thetmat, thetablkse, thetanblk, Theta_r_mat_1, Theta_r_mat_2, Theta_r_mat_3, Theta_r_mat_4, Theta_r_mat_5, thetaorder, thetarevord);
   }  
-  
+
+  // Initialize to-be-sampled parameters  
+  if (len_free[4] + len_free[9] + len_free[14] > 0) {
+    for (i in 1:Ntot) {
+      eta[i] = rep_vector(0, m);
+    }
+    for (mm in 1:Np) {
+      int g = grpnum[mm];
+      vector[matdim[g]] params;
+      eta = sample_eta(eta, YXstar, YXo, rep_matrix(0, m, m), Psi_tmp[g], Lambda[g], Thetmat[g], Thet_sd_dum[g], Nu[g], Alpha[g], Tau[g,,1], obsidx[mm], Ndum_x[mm], dum_lv_x_idx[mm], ord, Nord, nlevs, p, m, startrow[mm], endrow[mm]);
+
+      if (len_free[4] + len_free[14] > 0) {
+	params = sample_loc(eta, inverse_spd(Psi_tmp[g]), Alpha_skeleton[g], B_skeleton[g], Omega_inv[mm], gamma0[mm], matdim[g], m, startrow[mm], endrow[mm]);
+	// now put parameters in free parameter vectors
+	if (len_alph > 0) {
+	  for (j in 1:len_alph) {
+	    Alpha_free[j] = params[paidx[j]];
+	  }
+	}
+	if (len_b > 0) {
+	  for (j in 1:len_b) {
+	    B_free[pbidx[j, 1]] = params[pbidx[j, 2]];
+	  }
+	}
+      }
+    }
+    for (g in 1:Ng) {
+      Alpha[g] = fill_matrix(Alpha_free, Alpha_skeleton[g], w14skel, g_start14[g,1], g_start14[g,2]);
+      B[g] = fill_matrix(B_free, B_skeleton[g], w4skel, g_start4[g,1], g_start4[g,2]);
+    }
+
+    for (mm in 1:Np) {
+      int g = grpnum[mm];
+      if (len_free[9] > 0) {
+	Psi[g] = sample_psi(eta, Alpha[g], B[g], Psi[g], Psi_prior_shape[g], Psi_prior_rate[g], psinblk, psiblkse, psiorder[g], psirevord[g], g, m, startrow[mm], endrow[mm]);
+      }
+    }
+  }
+
+  // sampling
   for (i in 1:ngibbs) {
     for (mm in 1:Np) {
       array[p + q] int obsidx = Obsvar[mm,];
       array[p + q] int xidx;
       array[p + q] int xdatidx;
-      matrix[m, m] IBinv;
-      matrix[m, p] Lamt_Thet_inv;
-      matrix[m, m] Psi0_inv;
-      matrix[m, m] D;
-      matrix[m, m] Dchol;
-      vector[m] d;
       int r1 = startrow[mm];
       int r2 = endrow[mm];
       int g = grpnum[mm];
-      vector[matdim[g]] params;
-      matrix[matdim[g], matdim[g]] FVF = rep_matrix(0, matdim[g], matdim[g]);
-      vector[matdim[g]] FVz = rep_vector(0, matdim[g]);
-      matrix[matdim[g], matdim[g]] Dinv;
-      int pidx = 1;
 
-      IBinv = inverse(I - B[g]);
-      if (Ndum_x[mm] > 0) {
-	IBinv[dum_lv_x_idx[mm, 1:Ndum_x[mm]], dum_lv_x_idx[mm, 1:Ndum_x[mm]]] = rep_matrix(0, Ndum_x[mm], Ndum_x[mm]);
-	for (j in 1:Ndum_x[mm]) {
-	  IBinv[dum_lv_x_idx[mm, j], dum_lv_x_idx[mm, j]] = 1;
-	}
-      }
-      
-      // sample lvs
-      Psi0_inv = inverse_spd( quad_form_sym(Psi[g], IBinv') );
-      Lamt_Thet_inv = Lambda[g]' * inverse_spd( quad_form_sym(Thetmat[g], Theta_sd_dum[g]) ); // mxp
-      
-      D = inverse_spd( Lamt_Thet_inv * Lambda[g] + Psi0_inv );
-      // eq (20) fsr paper
-      // D = quad_form_sym(S[mm, 1:p, 1:p] - quad_form_sym(Theta_r[g], Theta_sd[g]), (Lamt_Thet_inv' * inverse_spd( Lamt_Thet_inv * Lambda[g] + Psi0_inv )));
-
-      Dchol = cholesky_decompose(D);
-      d = to_vector(Psi0_inv * IBinv * Alpha[g]);
-
-      for (ridx in r1:r2) {
-	// FIXME cannot handle combinations of ordinal and continuous
-	if (ord) {
-	  for (j in 1:Nord) {
-	    YXstar_gibbs[ridx, obsidx[j]] = trunc_normal_rng(Nu[g, obsidx[j], 1] + Lambda[g, obsidx[j]] * eta[ridx], Theta_sd_dum[g, obsidx[j], obsidx[j]], obsidx[j], nlevs, YXo[ridx, obsidx[j]], Tau[g,,1]);
-	  }
-	}
-	eta[ridx] = multi_normal_cholesky_rng(D * (d + Lamt_Thet_inv * (YXstar_gibbs[ridx] - to_vector(Nu[g]))), Dchol);
-
-	if (Ndum[mm] > 0) {
-	  eta[ridx, dum_lv_idx[mm, 1:Ndum[mm]]] = YXstar[ridx, dum_ov_idx[mm, 1:Ndum[mm]]];
-	}
-      }
+      eta[r1:r2] = sample_eta(eta, YXstar, YXo, B[g], Psi[g], Lambda[g], Thetmat[g], Thet_sd_dum[g], Nu[g], Alpha[g], Tau[g,,1], Obsvar[mm,], Ndum_x[mm], dum_lv_x_idx[mm], ord, Nord, nlevs, p, m, r1, r2);
 	
       // sample alpha, beta
       pidx = 1;
       Psi_inv = inverse_spd(Psi[g]);
 
-      // construct F_i matrix
-      // FIXME does not handle equality constraints
-      for (ridx in r1:r2) {
-	matrix[m, matdim[g]] etamat = rep_matrix(0, m, matdim[g]);
-	vector[m] z = eta[ridx];
-	pidx = 1;
-	
-	for (r in 1:m) {
-	  real askel = Alpha_skeleton[g, r, 1];
-	  if (is_inf(askel)) {
-	    etamat[r, pidx] = 1;
-	    pidx += 1;
-	  } else if (askel != 0) {
-	    z[r] += -askel;
-	  }
-	  for (c in 1:m) {
-	    real bskel = B_skeleton[g, r, c];
-	    if (is_inf(bskel)) {
-	      etamat[r, pidx] = eta[ridx, c];
-	      pidx += 1;
-	    } else if (bskel != 0) {
-	      z[r] += -bskel * eta[ridx, c];
-	    }
-	  }
-	}
-	
-	FVF += etamat' * Psi_inv * etamat;
-	FVz += etamat' * Psi_inv * z;
-      }
-      
-      FVF += Omega_inv[mm, matdim[g], matdim[g]];
-      FVz += Omega_inv[mm, matdim[g], matdim[g]] * gamma0[mm, matdim[g]];
-
-      Dinv = inverse_spd(FVF);
-
-      params = multi_normal_rng(Dinv * FVz, Dinv);
+      params = sample_loc(eta, Psi_inv, Alpha_skeleton[g], B_skeleton[g], Omega_inv[mm], gamma0[mm], matdim[g], m, r1, r2);
 
       // now put parameters in free parameter vectors
       for (j in 1:len_alph) {
@@ -1523,39 +1594,13 @@ generated quantities { // these matrices are saved in the output but do not figu
     for (gg in 1:Ng) {
       int r1 = 1;
       int r2 = N[1];
-      matrix[m, m] residcp = rep_matrix(0, m, m);      
 
       if (gg > 1) {
 	r1 = sum(N[1:(gg - 1)]);
 	r2 = sum(N[1:gg]);
       }
 
-      // loop over n, get cross product of residuals (eta - (alpha + B * eta))
-      for (ridx in r1:r2) {
-	residcp += tcrossprod(to_matrix(eta[ridx] - (to_vector(Alpha[gg]) + B[gg] * eta[ridx])));
-      }
-
-      if (sum(psinblk) > 0) {
-	matrix[m,m] Psiblk = Psi[gg, psiorder[gg], psiorder[gg]];
-	matrix[m,m] residord = residcp[psiorder[gg], psiorder[gg]];
-	for (k in 1:sum(psinblk)) {
-	  int blkgrp = psiblkse[k, 4];
-
-	  if (blkgrp == gg) {
-	    int srow = psiblkse[k, 1];
-	    int erow = psiblkse[k, 2];
-	    array[erow - srow + 1] int origrows = psirevord[gg, srow:erow];
-	    
-	    if (erow > srow) {
-	      Psiblk[srow:erow, srow:erow] = inv_wishart_rng((r2 - r1 + 1) + Psi_prior_shape[gg, origrows[1], origrows[1]], residord[srow:erow, srow:erow] + Psi_prior_rate[gg, origrows, origrows]);
-	    } else {
-	      // even if Psi was originally fixed, we sample in this step
-	      Psiblk[srow, srow] = inv_gamma_rng(.5 * (r2 - r1 + 1) + Psi_prior_shape[gg, origrows[1], origrows[1]], .5 * residord[srow, srow] + Psi_prior_rate[gg, origrows[1], origrows[1]]);
-	    }
-	  }
-	}
-	Psi[gg] = Psiblk[psirevord[gg], psirevord[gg]];
-      }
+      Psi[gg] = sample_psi(eta, Alpha[gg], B[gg], Psi[gg], Psi_prior_shape[gg], Psi_prior_rate[gg], psinblk, psiorder[gg], psirevord[gg], gg, m, r1, r2);
     }
   }
   // END OF GIBBS SAMPLER
