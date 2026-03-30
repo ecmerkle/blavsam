@@ -11,6 +11,7 @@ functions { // you can use these in R following `rstan::expose_stan_functions("f
     array[dims(YXstar)[1]] vector[p] YXstar_gibbs = YXstar;
     array[dims(etaold)[1]] vector[m] eta;
 
+    IBinv = inverse(diag_matrix(rep_vector(1, m)) - B);
     if (Ndum_x > 0) {
       IBinv[dum_lv_x_idx[1:Ndum_x], dum_lv_x_idx[1:Ndum_x]] = rep_matrix(0, Ndum_x, Ndum_x);
       for (j in 1:Ndum_x) {
@@ -93,15 +94,15 @@ functions { // you can use these in R following `rstan::expose_stan_functions("f
 
   matrix sample_psi_rng(array[] vector eta, matrix Alpha, matrix B, matrix Psi, matrix Psi_prior_shape, matrix Psi_prior_rate, array[] int psinblk, array[,] int psiblkse, array[] int psiorder, array[] int psirevord, int gg, int m, int r1, int r2) {
     matrix[m, m] residcp = rep_matrix(0, m, m);
-    matrix[m,m] Psiblk = Psi[psiorder, psiorder];
+    matrix[m, m] Psiblk = Psi[psiorder, psiorder];
     
     // loop over n, get cross product of residuals (eta - (alpha + B * eta))
     for (ridx in r1:r2) {
-      residcp += tcrossprod(to_matrix(eta[ridx] - (to_vector(Alpha[gg]) + B[gg] * eta[ridx])));
+      residcp += tcrossprod(to_matrix(eta[ridx] - (to_vector(Alpha) + B * eta[ridx])));
     }
 
     if (sum(psinblk) > 0) {
-      matrix[m,m] residord = residcp[psiorder, psiorder];
+      matrix[m, m] residord = residcp[psiorder, psiorder];
       for (k in 1:sum(psinblk)) {
 	int blkgrp = psiblkse[k, 4];
 
@@ -1519,7 +1520,7 @@ generated quantities { // these matrices are saved in the output but do not figu
 
   if (sum(thetanblk) > 0) {
     Thetmat = fill_cov(Thetmat, thetablkse, thetanblk, Theta_r_mat_1, Theta_r_mat_2, Theta_r_mat_3, Theta_r_mat_4, Theta_r_mat_5, thetaorder, thetarevord);
-  }  
+  }
 
   // Initialize to-be-sampled parameters  
   if (len_free[4] + len_free[9] + len_free[14] > 0) {
@@ -1546,6 +1547,7 @@ generated quantities { // these matrices are saved in the output but do not figu
 	}
       }
     }
+
     for (g in 1:Ng) {
       Alpha[g] = fill_matrix(Alpha_free, Alpha_skeleton[g], w14skel, g_start14[g,1], g_start14[g,2]);
       B[g] = fill_matrix(B_free, B_skeleton[g], w4skel, g_start4[g,1], g_start4[g,2]);
@@ -1554,7 +1556,9 @@ generated quantities { // these matrices are saved in the output but do not figu
     for (mm in 1:Np) {
       int g = grpnum[mm];
       if (len_free[9] > 0) {
-	Psi[g] = sample_psi_rng(eta, Alpha[g], B[g], Psi[g], Psi_prior_shape[g], Psi_prior_rate[g], psinblk, psiblkse, psiorder[g], psirevord[g], g, m, startrow[mm], endrow[mm]);
+	Psi[g] = sample_psi_rng(eta, Alpha[g], B[g], Psi_skeleton[g], Psi_prior_shape[g], Psi_prior_rate[g], psinblk, psiblkse, psiorder[g], psirevord[g], g, m, startrow[mm], endrow[mm]);
+      } else {
+	Psi[g] = Psi_tmp[g];
       }
     }
   }
@@ -1569,20 +1573,24 @@ generated quantities { // these matrices are saved in the output but do not figu
       int r2 = endrow[mm];
       int g = grpnum[mm];
       vector[matdim[g]] params;
-      
+
       eta[r1:r2] = sample_eta_rng(eta, YXstar, YXo, B[g], Psi[g], Lambda[g], Thetmat[g], Theta_sd_dum[g], Nu[g], Alpha[g], Tau[g,,1], Obsvar[mm,], Ndum[mm], dum_ov_idx[mm], dum_lv_idx[mm], Ndum_x[mm], dum_lv_x_idx[mm], ord, Nord, nlevs, p, m, r1, r2);
-	
+      
       // sample alpha, beta
       Psi_inv = inverse_spd(Psi[g]);
 
       params = sample_loc_rng(eta, Psi_inv, Alpha_skeleton[g], B_skeleton[g], Omega_inv[mm], gamma0[mm], matdim[g], m, r1, r2);
 
       // now put parameters in free parameter vectors
-      for (j in 1:len_alph) {
-	Alpha_free[j] = params[paidx[j]];
+      if (len_alph > 0) {
+	for (j in 1:len_alph) {
+	  Alpha_free[j] = params[paidx[j]];
+	}
       }
-      for (j in 1:len_b) {
-	B_free[pbidx[j, 1]] = params[pbidx[j, 2]];
+      if (len_b > 0) {
+	for (j in 1:len_b) {
+	  B_free[pbidx[j, 1]] = params[pbidx[j, 2]];
+	}
       }
     }
 
@@ -1593,16 +1601,19 @@ generated quantities { // these matrices are saved in the output but do not figu
     }
 
     // sample Psi
-    for (gg in 1:Ng) {
-      int r1 = 1;
-      int r2 = N[1];
+    if (len_free[9] > 0) {
+      for (gg in 1:Ng) {
+	int r1 = 1;
+	int r2 = N[1];
 
-      if (gg > 1) {
-	r1 = sum(N[1:(gg - 1)]);
-	r2 = sum(N[1:gg]);
+	if (gg > 1) {
+	  r1 = sum(N[1:(gg - 1)]);
+	  r2 = sum(N[1:gg]);
+	}
+
+	// line 1492 according to rstan
+	Psi[gg] = sample_psi_rng(eta, Alpha[gg], B[gg], Psi[gg], Psi_prior_shape[gg], Psi_prior_rate[gg], psinblk, psiblkse, psiorder[gg], psirevord[gg], gg, m, r1, r2);
       }
-
-      Psi[gg] = sample_psi_rng(eta, Alpha[gg], B[gg], Psi[gg], Psi_prior_shape[gg], Psi_prior_rate[gg], psinblk, psiblkse, psiorder[gg], psirevord[gg], gg, m, r1, r2);
     }
   }
   // END OF GIBBS SAMPLER
