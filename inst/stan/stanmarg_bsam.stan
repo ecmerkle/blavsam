@@ -82,8 +82,8 @@ functions { // you can use these in R following `rstan::expose_stan_functions("f
       FVz += etamat' * Psi_inv * z;
     }
 
-    FVF += Omega_inv[matdim, matdim];
-    FVz += Omega_inv[matdim, matdim] * gamma0[matdim];
+    FVF += Omega_inv[1:matdim, 1:matdim];
+    FVz += Omega_inv[1:matdim, 1:matdim] * gamma0[1:matdim];
     
     Dinv = inverse_spd(FVF);
 
