@@ -569,10 +569,6 @@ data {
   array[Ng] matrix[p_tilde, p_tilde] cov_w; // observed "within" covariance matrix
   array[sum(nclus[,2])] vector[p_tilde] mean_d_full; // sample means/covs by cluster, for clusterwise log-densities
   array[sum(nclus[,2])] matrix[p_tilde, p_tilde] cov_d_full;
-  array[Ng] vector[p_tilde] xbar_w; // data estimates of within/between means/covs (for saturated logl)
-  array[Ng] vector[p_tilde] xbar_b;
-  array[Ng] matrix[p_tilde, p_tilde] cov_b;
-  array[Ng] real gs; // group size constant, for computation of saturated logl
   int N_within; // number of within variables
   int N_between; // number of between variables
   int N_both; // number of variables at both levels
