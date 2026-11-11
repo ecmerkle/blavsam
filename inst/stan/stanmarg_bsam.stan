@@ -1519,7 +1519,9 @@ generated quantities { // these matrices are saved in the output but do not figu
   }
 
   // Initialize to-be-sampled parameters  
-  if (len_free[4] + len_free[9] + len_free[14] > 0) {
+  // sum(psinblk) > 0 covers std.lv = TRUE, where latent variances are fixed
+  // (len_free[9] == 0) but factor covariances are still sampled
+  if (len_free[4] + len_free[9] + len_free[14] > 0 || sum(psinblk) > 0) {
     for (i in 1:Ntot) {
       eta[i] = rep_vector(0, m);
     }
@@ -1551,11 +1553,18 @@ generated quantities { // these matrices are saved in the output but do not figu
 
     for (mm in 1:Np) {
       int g = grpnum[mm];
-      if (len_free[9] > 0) {
+      if (sum(psinblk) > 0) {
 	Psi[g] = sample_psi_rng(eta, Alpha[g], B[g], Psi_skeleton[g], Psi_prior_shape[g], Psi_prior_rate[g], psinblk, psiblkse, psiorder[g], psirevord[g], g, m, startrow[mm], endrow[mm]);
       } else {
 	Psi[g] = Psi_tmp[g];
       }
+    }
+  } else {
+    for (i in 1:Ntot) {
+      eta[i] = rep_vector(0, m);
+    }
+    for (g in 1:Ng) {
+      Psi[g] = Psi_tmp[g];
     }
   }
 
@@ -1596,8 +1605,8 @@ generated quantities { // these matrices are saved in the output but do not figu
       B[g] = fill_matrix(B_free, B_skeleton[g], w4skel, g_start4[g,1], g_start4[g,2]);
     }
 
-    // sample Psi
-    if (len_free[9] > 0) {
+    // sample Psi (also under std.lv, as in lavaan's local SAM)
+    if (sum(psinblk) > 0) {
       for (gg in 1:Ng) {
 	int r1 = 1;
 	int r2 = N[1];
