@@ -15,5 +15,5 @@ LinkingTo: StanHeaders (>= 2.26.0), rstan (>= 2.26.0), BH (>= 1.69.0), Rcpp (>= 
 Suggests: modeest(>= 2.3.3), cmdstanr, semTools, tinytest
 SystemRequirements: GNU make
 NeedsCompilation: yes
-Additional_repositories: https://mc-stan.org/r-packages/
+Additional_repositories: https://stan-dev.r-universe.dev/
 
